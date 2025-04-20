@@ -6,10 +6,10 @@ import random
 from tqdm import tqdm
 from matplotlib.colors import LightSource
 
-# Enhanced parameters
+# Parameters
 grid_size = 8
 pocket_margin = 0.10
-pocket_depth = 0.70
+pocket_depth = 0.30
 box_size = 1.0
 
 # Create grid points
@@ -17,13 +17,13 @@ x_vals = np.linspace(pocket_margin, box_size-pocket_margin, grid_size)
 y_vals = np.linspace(pocket_margin, box_size-pocket_margin, grid_size)
 grid_points = [[x, y, box_size] for x in x_vals for y in y_vals]
 
-# GA parameters
+# Optimized GA parameters
 GA_PARAMS = {
-    'pop_size': 25,
-    'generations': 60,
-    'mutation_rate': 0.18,
-    'elitism': 2,
-    'tournament_size': 4
+    'pop_size': 70,           # Larger population for diversity
+    'generations': 150,       # More generations for convergence
+    'mutation_rate': 0.5,    # Lower mutation rate to preserve good solutions
+    'elitism': 3,            # Keep more elite solutions
+    'tournament_size': 5      # Stronger selection pressure
 }
 
 class ToolpathOptimizer:
@@ -50,7 +50,7 @@ class ToolpathOptimizer:
     def initialize_population(self):
         population = []
         for _ in range(GA_PARAMS['pop_size']):
-            if random.random() < 0.7:
+            if random.random() < 0.9:  # 90% nearest-neighbor starts
                 start = random.randint(0, len(self.points)-1)
                 path = self._nearest_neighbor_path(start)
             else:
@@ -98,8 +98,12 @@ class ToolpathOptimizer:
                 
                 population = new_pop
                 
-                if gen % 10 == 0 and gen > 0:
-                    best_path = self._two_opt(best_path)
+                # Apply 2-opt every generation for faster convergence
+                best_path = self._two_opt(best_path)
+                
+                # Optional: Apply 3-opt occasionally for further refinement
+                if gen % 20 == 0:
+                    best_path = self._three_opt(best_path)
                 
                 pbar.update(1)
         
@@ -151,6 +155,21 @@ class ToolpathOptimizer:
                         improved = True
             path = best_path
         return best_path
+    
+    def _three_opt(self, path):
+        best_path = path
+        best_length = self.path_length(path)
+        
+        for i in range(1, len(path)-3):
+            for j in range(i+1, len(path)-2):
+                for k in range(j+1, len(path)-1):
+                    # Try all 3-opt combinations
+                    new_path = path[:i] + path[i:j][::-1] + path[j:k][::-1] + path[k:]
+                    new_length = self.path_length(new_path)
+                    if new_length < best_length:
+                        best_path = new_path
+                        best_length = new_length
+        return best_path
 
 def create_zigzag_path():
     path = []
@@ -160,6 +179,8 @@ def create_zigzag_path():
         else:
             path.extend([[x, y, box_size] for y in reversed(y_vals)])
     return path
+
+# Rest of the code (BoxVisualizer and main execution) remains the same...
 
 class BoxVisualizer:
     def __init__(self):
@@ -317,7 +338,7 @@ class BoxVisualizer:
             self.fig, 
             self._update_animation,
             frames=max_frames,
-            interval=50,
+            interval=200,
             blit=True,
             init_func=lambda: [self.opt_line, self.opt_drill, self.zz_line, self.zz_drill],
             fargs=(optimized_path, zigzag_path)
