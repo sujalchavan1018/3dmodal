@@ -1,26 +1,42 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from matplotlib.animation import FuncAnimation
 import random
 from tqdm import tqdm
 from matplotlib.colors import LightSource
+from scipy.interpolate import make_interp_spline
 
-# Parameters
+# Parameters with some randomness
 grid_size = 8
 pocket_margin = 0.10
 pocket_depth = 0.30
-h_width = 3.0  # Width of H letter
-h_height = 3.0  # Height of H letter
-h_depth = 1.5   # Depth of H letter
+h_width = 3.0
+h_height = 3.0
+h_depth = 1.5
 
-# Create grid points on the top surface of the H letter
-x_vals = np.linspace(pocket_margin, h_width-pocket_margin, grid_size)
-y_vals = np.linspace(pocket_margin, h_height-pocket_margin, grid_size)
-grid_points = [[x, y, h_depth] for x in x_vals for y in y_vals 
-              if (x < 0.8 or x > 2.2 or (y > 1.1 and y < 1.9))]  # Only points on H surface
+# Create grid points with some randomness
+def create_grid_with_randomness():
+    x_vals = np.linspace(pocket_margin, h_width-pocket_margin, grid_size)
+    y_vals = np.linspace(pocket_margin, h_height-pocket_margin, grid_size)
+    grid_points = []
+    
+    for x in x_vals:
+        for y in y_vals:
+            # Add some randomness to positions (10% of grid spacing)
+            rand_x = random.uniform(-0.03, 0.03)
+            rand_y = random.uniform(-0.03, 0.03)
+            
+            if (x < 0.8 or x > 2.2 or (y > 1.1 and y < 1.9)):
+                if 1.0 < x < 2.0 and 1.3 < y < 1.7:
+                    grid_points.append([x + rand_x, y + rand_y, h_depth - pocket_depth])
+                else:
+                    grid_points.append([x + rand_x, y + rand_y, h_depth])
+    return grid_points
 
-# Optimized GA parameters
+grid_points = create_grid_with_randomness()
+
+# GA Parameters
 GA_PARAMS = {
     'pop_size': 70,
     'generations': 150,
@@ -107,7 +123,7 @@ class ToolpathOptimizer:
                 
                 pbar.update(1)
         
-        return [self.points[i] for i in best_path]
+        return best_path
     
     def _tournament_select(self, population, fitnesses):
         contestants = random.sample(list(zip(population, fitnesses)), 
@@ -171,24 +187,21 @@ class ToolpathOptimizer:
         return best_path
 
 def create_zigzag_path():
-    path = []
-    # Create zigzag pattern only on H surface
-    for i, x in enumerate(x_vals):
-        if i % 2 == 0:
-            for y in y_vals:
-                if (x < 0.8 or x > 2.2 or (y > 1.1 and y < 1.9)):
-                    path.append([x, y, h_depth])
-        else:
-            for y in reversed(y_vals):
-                if (x < 0.8 or x > 2.2 or (y > 1.1 and y < 1.9)):
-                    path.append([x, y, h_depth])
-    return path
+    """Create a simple zigzag path for comparison"""
+    # Sort points in a simple zigzag pattern
+    sorted_points = sorted(grid_points, key=lambda p: (p[1], p[0] if p[1] % 0.2 < 0.1 else -p[0]))
+    return sorted_points
+
+def find_closest_point_index(target_point, points_list):
+    """Find the index of the closest point in points_list to target_point"""
+    distances = [np.linalg.norm(np.array(target_point) - np.array(p)) for p in points_list]
+    return np.argmin(distances)
 
 class HLetterVisualizer:
     def __init__(self):
-        self.fig = plt.figure(figsize=(20, 8), facecolor='white')
-        self.ax1 = self.fig.add_subplot(121, projection='3d')  # Optimized
-        self.ax2 = self.fig.add_subplot(122, projection='3d')  # Zigzag
+        self.fig = plt.figure(figsize=(18, 8), facecolor='white')
+        self.ax1 = self.fig.add_subplot(121, projection='3d')  # Optimized path
+        self.ax2 = self.fig.add_subplot(122, projection='3d')  # Zigzag path
         self._setup_lighting()
         self.setup_scenes()
     
@@ -201,36 +214,32 @@ class HLetterVisualizer:
         }
     
     def _create_h_letter(self, ax):
-        # Left vertical bar vertices
+        # Create H letter geometry
         left_front = np.array([
             [0, 0, 0], [0, h_height, 0], [0.8, h_height, 0], [0.8, 0, 0],
             [0, 0, h_depth], [0, h_height, h_depth], [0.8, h_height, h_depth], [0.8, 0, h_depth]
         ])
         
-        # Right vertical bar vertices
         right_front = np.array([
             [2.2, 0, 0], [2.2, h_height, 0], [h_width, h_height, 0], [h_width, 0, 0],
             [2.2, 0, h_depth], [2.2, h_height, h_depth], [h_width, h_height, h_depth], [h_width, 0, h_depth]
         ])
         
-        # Horizontal bar vertices
         horizontal = np.array([
             [0.8, 1.1, 0], [0.8, 1.9, 0], [2.2, 1.9, 0], [2.2, 1.1, 0],
             [0.8, 1.1, h_depth], [0.8, 1.9, h_depth], [2.2, 1.9, h_depth], [2.2, 1.1, h_depth]
         ])
         
-        # Define faces for each part
         def get_faces(vertices):
             return [
-                [vertices[0], vertices[1], vertices[2], vertices[3]],  # front
-                [vertices[4], vertices[5], vertices[6], vertices[7]],  # back
-                [vertices[0], vertices[1], vertices[5], vertices[4]],  # top
-                [vertices[2], vertices[3], vertices[7], vertices[6]],  # bottom
-                [vertices[1], vertices[2], vertices[6], vertices[5]],  # right
-                [vertices[0], vertices[3], vertices[7], vertices[4]]   # left
+                [vertices[0], vertices[1], vertices[2], vertices[3]],
+                [vertices[4], vertices[5], vertices[6], vertices[7]],
+                [vertices[0], vertices[1], vertices[5], vertices[4]],
+                [vertices[2], vertices[3], vertices[7], vertices[6]],
+                [vertices[1], vertices[2], vertices[6], vertices[5]],
+                [vertices[0], vertices[3], vertices[7], vertices[4]]
             ]
         
-        # Create all parts with shading
         for vertices, color_factor in [(left_front, 1.0), (right_front, 1.0), (horizontal, 0.9)]:
             faces = get_faces(vertices)
             shaded_colors = []
@@ -255,18 +264,23 @@ class HLetterVisualizer:
             )
             ax.add_collection3d(poly)
         
-        # Add grid points
         xs, ys, zs = zip(*grid_points)
+        colors = []
+        for point in grid_points:
+            if 1.0 < point[0] < 2.0 and 1.3 < point[1] < 1.7:
+                colors.append('red')
+            else:
+                colors.append(self.face_colors['grid'])
+                
         ax.scatter(
             xs, ys, zs, 
-            color=self.face_colors['grid'], 
+            color=colors,
             s=40, 
             edgecolor='k',
             linewidth=1,
             zorder=5
         )
         
-        # Configure view
         ax.view_init(elev=30, azim=-50)
         ax.set_xlim(0, h_width)
         ax.set_ylim(0, h_height)
@@ -280,21 +294,23 @@ class HLetterVisualizer:
     def setup_scenes(self):
         self._create_h_letter(self.ax1)
         self._create_h_letter(self.ax2)
-        self.ax1.set_title('Optimized Toolpath', fontsize=12, pad=15)
-        self.ax2.set_title('Zigzag Toolpath', fontsize=12, pad=15)
-        self.fig.suptitle('H Letter Toolpath Comparison', fontsize=16, y=0.95)
+        self.ax1.set_title('Optimized Path (Shortest Distance)', fontsize=12, pad=15)
+        self.ax2.set_title('Zigzag Path (Inefficient)', fontsize=12, pad=15)
+        self.fig.suptitle('Toolpath Comparison: Optimized vs. Zigzag', fontsize=16, y=0.95)
     
     def animate_paths(self, optimized_path, zigzag_path):
-        # Initialize both paths
-        self.opt_line, = self.ax1.plot([], [], [], 'r-', linewidth=2, zorder=6)
-        self.opt_drill, = self.ax1.plot([], [], [], 'ko', markersize=8, zorder=10)
+        # Initialize paths
+        self.opt_line, = self.ax1.plot([], [], [], color='lime', linewidth=3, zorder=6, alpha=0.9)
+        self.opt_drill, = self.ax1.plot([], [], [], 'o', color='yellow', markersize=8, 
+                                      markeredgecolor='black', linewidth=1, zorder=10)
         
-        self.zz_line, = self.ax2.plot([], [], [], 'b-', linewidth=2, zorder=6)
-        self.zz_drill, = self.ax2.plot([], [], [], 'ko', markersize=8, zorder=10)
+        self.zig_line, = self.ax2.plot([], [], [], color='red', linewidth=3, zorder=6, alpha=0.7)
+        self.zig_drill, = self.ax2.plot([], [], [], 'o', color='orange', markersize=8, 
+                                      markeredgecolor='black', linewidth=1, zorder=10)
         
         # Store path coordinates
         self.opt_x, self.opt_y, self.opt_z = [], [], []
-        self.zz_x, self.zz_y, self.zz_z = [], [], []
+        self.zig_x, self.zig_y, self.zig_z = [], [], []
         
         # Create animation
         max_frames = max(len(optimized_path), len(zigzag_path))
@@ -302,55 +318,77 @@ class HLetterVisualizer:
             self.fig, 
             self._update_animation,
             frames=max_frames,
-            interval=200,
+            interval=50,
             blit=True,
-            init_func=lambda: [self.opt_line, self.opt_drill, self.zz_line, self.zz_drill],
+            init_func=lambda: [self.opt_line, self.opt_drill, 
+                             self.zig_line, self.zig_drill],
             fargs=(optimized_path, zigzag_path)
         )
     
-    def _update_animation(self, frame, opt_path, zz_path):
+    def _update_animation(self, frame, opt_path, zig_path):
         # Update optimized path
         if frame < len(opt_path):
             x, y, z = opt_path[frame]
             self.opt_drill.set_data([x], [y])
             self.opt_drill.set_3d_properties([z])
+            
             self.opt_x.append(x)
             self.opt_y.append(y)
             self.opt_z.append(z)
-            self.opt_line.set_data(self.opt_x, self.opt_y)
-            self.opt_line.set_3d_properties(self.opt_z)
+            
+            if len(self.opt_x) > 1:
+                # Create smooth path
+                t = np.linspace(0, 1, len(self.opt_x))
+                try:
+                    spl_x = make_interp_spline(t, self.opt_x, k=3)
+                    spl_y = make_interp_spline(t, self.opt_y, k=3)
+                    spl_z = make_interp_spline(t, self.opt_z, k=3)
+                    t_new = np.linspace(0, 1, len(self.opt_x)*3)
+                    x_smooth = spl_x(t_new)
+                    y_smooth = spl_y(t_new)
+                    z_smooth = spl_z(t_new)
+                    self.opt_line.set_data(x_smooth, y_smooth)
+                    self.opt_line.set_3d_properties(z_smooth)
+                except:
+                    self.opt_line.set_data(self.opt_x, self.opt_y)
+                    self.opt_line.set_3d_properties(self.opt_z)
         
         # Update zigzag path
-        if frame < len(zz_path):
-            x, y, z = zz_path[frame]
-            self.zz_drill.set_data([x], [y])
-            self.zz_drill.set_3d_properties([z])
-            self.zz_x.append(x)
-            self.zz_y.append(y)
-            self.zz_z.append(z)
-            self.zz_line.set_data(self.zz_x, self.zz_y)
-            self.zz_line.set_3d_properties(self.zz_z)
+        if frame < len(zig_path):
+            x, y, z = zig_path[frame]
+            self.zig_drill.set_data([x], [y])
+            self.zig_drill.set_3d_properties([z])
+            
+            self.zig_x.append(x)
+            self.zig_y.append(y)
+            self.zig_z.append(z)
+            
+            if len(self.zig_x) > 1:
+                self.zig_line.set_data(self.zig_x, self.zig_y)
+                self.zig_line.set_3d_properties(self.zig_z)
         
-        return self.opt_line, self.opt_drill, self.zz_line, self.zz_drill
+        return self.opt_line, self.opt_drill, self.zig_line, self.zig_drill
 
 # Main execution
 if __name__ == "__main__":
     print("Optimizing toolpath...")
     optimizer = ToolpathOptimizer(grid_points)
-    optimized_path = optimizer.evolve()
+    optimized_path_indices = optimizer.evolve()
+    optimized_path = [grid_points[i] for i in optimized_path_indices]
     zigzag_path = create_zigzag_path()
     
     # Calculate path lengths
-    opt_length = optimizer.path_length([grid_points.index(p) for p in optimized_path])
-    zz_length = optimizer.path_length([grid_points.index(p) for p in zigzag_path])
+    opt_length = optimizer.path_length(optimized_path_indices)
+    zigzag_indices = [find_closest_point_index(p, grid_points) for p in zigzag_path]
+    zigzag_length = optimizer.path_length(zigzag_indices)
     
     print(f"\nOptimized Path Length: {opt_length:.4f} units")
-    print(f"Zigzag Path Length: {zz_length:.4f} units")
-    print(f"Improvement: {(1 - opt_length/zz_length)*100:.2f}% shorter")
+    print(f"Zigzag Path Length: {zigzag_length:.4f} units")
+    print(f"Difference: {zigzag_length-opt_length:.4f} units ({(zigzag_length/opt_length-1)*100:.2f}% longer)")
     
     print("Creating visualization...")
     visualizer = HLetterVisualizer()
     visualizer.animate_paths(optimized_path, zigzag_path)
     
     plt.tight_layout()
-    plt.show() 
+    plt.show()

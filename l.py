@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from matplotlib.animation import FuncAnimation
 import random
 from tqdm import tqdm
@@ -10,17 +10,23 @@ from matplotlib.colors import LightSource
 grid_size = 8
 pocket_margin = 0.10
 pocket_depth = 0.30
-h_width = 3.0  # Width of H letter
-h_height = 3.0  # Height of H letter
-h_depth = 1.5   # Depth of H letter
+l_width = 3.0
+l_height = 3.0
+l_depth = 1.5
 
-# Create grid points on the top surface of the H letter
-x_vals = np.linspace(pocket_margin, h_width-pocket_margin, grid_size)
-y_vals = np.linspace(pocket_margin, h_height-pocket_margin, grid_size)
-grid_points = [[x, y, h_depth] for x in x_vals for y in y_vals 
-              if (x < 0.8 or x > 2.2 or (y > 1.1 and y < 1.9))]  # Only points on H surface
+# Create grid points with pocket
+x_vals = np.linspace(pocket_margin, l_width-pocket_margin, grid_size)
+y_vals = np.linspace(pocket_margin, l_height-pocket_margin, grid_size)
+grid_points = []
+for x in x_vals:
+    for y in y_vals:
+        if (x < 0.8 or y < 0.8):  # L shape condition
+            if 0.5 < x < 1.5 and 0.5 < y < 1.5:  # Pocket area
+                grid_points.append([x, y, l_depth - pocket_depth])
+            else:
+                grid_points.append([x, y, l_depth])
 
-# Optimized GA parameters
+# GA Parameters (unchanged)
 GA_PARAMS = {
     'pop_size': 70,
     'generations': 150,
@@ -29,6 +35,7 @@ GA_PARAMS = {
     'tournament_size': 5
 }
 
+# ToolpathOptimizer class remains exactly the same
 class ToolpathOptimizer:
     def __init__(self, points):
         self.points = points
@@ -170,25 +177,67 @@ class ToolpathOptimizer:
                         best_length = new_length
         return best_path
 
-def create_zigzag_path():
-    path = []
-    # Create zigzag pattern only on H surface
-    for i, x in enumerate(x_vals):
-        if i % 2 == 0:
-            for y in y_vals:
-                if (x < 0.8 or x > 2.2 or (y > 1.1 and y < 1.9)):
-                    path.append([x, y, h_depth])
-        else:
-            for y in reversed(y_vals):
-                if (x < 0.8 or x > 2.2 or (y > 1.1 and y < 1.9)):
-                    path.append([x, y, h_depth])
-    return path
+def create_spiral_pocket_path():
+    """Create a spiral path specifically for the pocket area"""
+    pocket_points = [p for p in grid_points if 0.5 < p[0] < 1.5 and 0.5 < p[1] < 1.5]
+    
+    # Sort points in a spiral pattern
+    center_x = (0.5 + 1.5) / 2
+    center_y = (0.5 + 1.5) / 2
+    
+    # Sort by angle and distance from center
+    pocket_points_sorted = sorted(pocket_points,
+                                key=lambda p: (np.arctan2(p[1]-center_y, p[0]-center_x),
+                                np.linalg.norm([p[0]-center_x, p[1]-center_y])))
+    
+    # Alternate between inner and outer points for spiral effect
+    spiral_path = []
+    n = len(pocket_points_sorted)
+    for i in range(n//2):
+        spiral_path.append(pocket_points_sorted[i])
+        spiral_path.append(pocket_points_sorted[n-1-i])
+    if n % 2 != 0:
+        spiral_path.append(pocket_points_sorted[n//2])
+    
+    return spiral_path
 
-class HLetterVisualizer:
+def create_hybrid_path(optimized_path):
+    """Combine optimized path with spiral pattern in pocket area"""
+    # Separate pocket and non-pocket points
+    pocket_indices = [i for i, p in enumerate(grid_points) 
+                     if 0.5 < p[0] < 1.5 and 0.5 < p[1] < 1.5]
+    non_pocket_indices = [i for i in range(len(grid_points)) if i not in pocket_indices]
+    
+    # Get optimized order for non-pocket points
+    optimized_non_pocket = [i for i in optimized_path if i in non_pocket_indices]
+    
+    # Create spiral path for pocket
+    spiral_pocket = create_spiral_pocket_path()
+    spiral_indices = [grid_points.index(p) for p in spiral_pocket]
+    
+    # Find best insertion point for spiral in optimized path
+    if optimized_non_pocket and spiral_indices:
+        # Find point in optimized path closest to spiral start
+        spiral_start_point = grid_points[spiral_indices[0]]
+        closest_idx = min(range(len(optimized_non_pocket)),
+                        key=lambda i: np.linalg.norm(
+                            np.array(grid_points[optimized_non_pocket[i]]) - 
+                            np.array(spiral_start_point)))
+        
+        # Insert spiral after closest point
+        hybrid_indices = (optimized_non_pocket[:closest_idx+1] + 
+                         spiral_indices + 
+                         optimized_non_pocket[closest_idx+1:])
+    else:
+        hybrid_indices = optimized_path
+    
+    return [grid_points[i] for i in hybrid_indices]
+
+class LLetterVisualizer:
     def __init__(self):
-        self.fig = plt.figure(figsize=(20, 8), facecolor='white')
-        self.ax1 = self.fig.add_subplot(121, projection='3d')  # Optimized
-        self.ax2 = self.fig.add_subplot(122, projection='3d')  # Zigzag
+        self.fig = plt.figure(figsize=(18, 8), facecolor='white')
+        self.ax1 = self.fig.add_subplot(121, projection='3d')  # Hybrid path
+        self.ax2 = self.fig.add_subplot(122, projection='3d')  # Path comparison
         self._setup_lighting()
         self.setup_scenes()
     
@@ -200,38 +249,29 @@ class HLetterVisualizer:
             'top': '#98FB98', 'grid': '#FFFFFF'
         }
     
-    def _create_h_letter(self, ax):
-        # Left vertical bar vertices
-        left_front = np.array([
-            [0, 0, 0], [0, h_height, 0], [0.8, h_height, 0], [0.8, 0, 0],
-            [0, 0, h_depth], [0, h_height, h_depth], [0.8, h_height, h_depth], [0.8, 0, h_depth]
+    def _create_l_letter(self, ax):
+        # Create L letter geometry
+        vertical = np.array([
+            [0, 0, 0], [0, l_height, 0], [0.8, l_height, 0], [0.8, 0, 0],
+            [0, 0, l_depth], [0, l_height, l_depth], [0.8, l_height, l_depth], [0.8, 0, l_depth]
         ])
         
-        # Right vertical bar vertices
-        right_front = np.array([
-            [2.2, 0, 0], [2.2, h_height, 0], [h_width, h_height, 0], [h_width, 0, 0],
-            [2.2, 0, h_depth], [2.2, h_height, h_depth], [h_width, h_height, h_depth], [h_width, 0, h_depth]
-        ])
-        
-        # Horizontal bar vertices
         horizontal = np.array([
-            [0.8, 1.1, 0], [0.8, 1.9, 0], [2.2, 1.9, 0], [2.2, 1.1, 0],
-            [0.8, 1.1, h_depth], [0.8, 1.9, h_depth], [2.2, 1.9, h_depth], [2.2, 1.1, h_depth]
+            [0, 0, 0], [0, 0.8, 0], [l_width, 0.8, 0], [l_width, 0, 0],
+            [0, 0, l_depth], [0, 0.8, l_depth], [l_width, 0.8, l_depth], [l_width, 0, l_depth]
         ])
         
-        # Define faces for each part
         def get_faces(vertices):
             return [
-                [vertices[0], vertices[1], vertices[2], vertices[3]],  # front
-                [vertices[4], vertices[5], vertices[6], vertices[7]],  # back
-                [vertices[0], vertices[1], vertices[5], vertices[4]],  # top
-                [vertices[2], vertices[3], vertices[7], vertices[6]],  # bottom
-                [vertices[1], vertices[2], vertices[6], vertices[5]],  # right
-                [vertices[0], vertices[3], vertices[7], vertices[4]]   # left
+                [vertices[0], vertices[1], vertices[2], vertices[3]],
+                [vertices[4], vertices[5], vertices[6], vertices[7]],
+                [vertices[0], vertices[1], vertices[5], vertices[4]],
+                [vertices[2], vertices[3], vertices[7], vertices[6]],
+                [vertices[1], vertices[2], vertices[6], vertices[5]],
+                [vertices[0], vertices[3], vertices[7], vertices[4]]
             ]
         
-        # Create all parts with shading
-        for vertices, color_factor in [(left_front, 1.0), (right_front, 1.0), (horizontal, 0.9)]:
+        for vertices, color_factor in [(vertical, 1.0), (horizontal, 0.9)]:
             faces = get_faces(vertices)
             shaded_colors = []
             for face in faces:
@@ -255,22 +295,27 @@ class HLetterVisualizer:
             )
             ax.add_collection3d(poly)
         
-        # Add grid points
         xs, ys, zs = zip(*grid_points)
+        colors = []
+        for point in grid_points:
+            if 0.5 < point[0] < 1.5 and 0.5 < point[1] < 1.5:  # Pocket area
+                colors.append('red')
+            else:
+                colors.append(self.face_colors['grid'])
+                
         ax.scatter(
             xs, ys, zs, 
-            color=self.face_colors['grid'], 
+            color=colors,
             s=40, 
             edgecolor='k',
             linewidth=1,
             zorder=5
         )
         
-        # Configure view
         ax.view_init(elev=30, azim=-50)
-        ax.set_xlim(0, h_width)
-        ax.set_ylim(0, h_height)
-        ax.set_zlim(0, h_depth*1.1)
+        ax.set_xlim(0, l_width)
+        ax.set_ylim(0, l_height)
+        ax.set_zlim(0, l_depth*1.1)
         ax.set_xlabel('X Axis', fontsize=10)
         ax.set_ylabel('Y Axis', fontsize=10)
         ax.set_zlabel('Z Axis', fontsize=10)
@@ -278,79 +323,88 @@ class HLetterVisualizer:
         ax.set_facecolor('white')
     
     def setup_scenes(self):
-        self._create_h_letter(self.ax1)
-        self._create_h_letter(self.ax2)
-        self.ax1.set_title('Optimized Toolpath', fontsize=12, pad=15)
-        self.ax2.set_title('Zigzag Toolpath', fontsize=12, pad=15)
-        self.fig.suptitle('H Letter Toolpath Comparison', fontsize=16, y=0.95)
+        self._create_l_letter(self.ax1)
+        self._create_l_letter(self.ax2)
+        self.ax1.set_title('Hybrid Toolpath (Optimal + Spiral)', fontsize=12, pad=15)
+        self.ax2.set_title('Toolpath Comparison', fontsize=12, pad=15)
+        self.fig.suptitle('L Letter with Pocket - Hybrid Toolpath', fontsize=16, y=0.95)
     
-    def animate_paths(self, optimized_path, zigzag_path):
-        # Initialize both paths
-        self.opt_line, = self.ax1.plot([], [], [], 'r-', linewidth=2, zorder=6)
-        self.opt_drill, = self.ax1.plot([], [], [], 'ko', markersize=8, zorder=10)
+    def animate_paths(self, hybrid_path, optimized_path, spiral_pocket_path):
+        # Initialize paths
+        self.hybrid_line, = self.ax1.plot([], [], [], 'g-', linewidth=3, zorder=6)
+        self.hybrid_drill, = self.ax1.plot([], [], [], 'ko', markersize=8, zorder=10)
         
-        self.zz_line, = self.ax2.plot([], [], [], 'b-', linewidth=2, zorder=6)
-        self.zz_drill, = self.ax2.plot([], [], [], 'ko', markersize=8, zorder=10)
+        self.opt_line, = self.ax2.plot([], [], [], 'r-', linewidth=1.5, zorder=6, alpha=0.7)
+        self.spiral_line, = self.ax2.plot([], [], [], 'b-', linewidth=1.5, zorder=6, alpha=0.7)
         
         # Store path coordinates
+        self.hybrid_x, self.hybrid_y, self.hybrid_z = [], [], []
         self.opt_x, self.opt_y, self.opt_z = [], [], []
-        self.zz_x, self.zz_y, self.zz_z = [], [], []
+        self.spiral_x, self.spiral_y, self.spiral_z = [], [], []
         
         # Create animation
-        max_frames = max(len(optimized_path), len(zigzag_path))
+        max_frames = max(len(hybrid_path), len(optimized_path), len(spiral_pocket_path))
         self.ani = FuncAnimation(
             self.fig, 
             self._update_animation,
             frames=max_frames,
-            interval=200,
+            interval=100,
             blit=True,
-            init_func=lambda: [self.opt_line, self.opt_drill, self.zz_line, self.zz_drill],
-            fargs=(optimized_path, zigzag_path)
+            init_func=lambda: [self.hybrid_line, self.hybrid_drill, 
+                             self.opt_line, self.spiral_line],
+            fargs=(hybrid_path, optimized_path, spiral_pocket_path)
         )
     
-    def _update_animation(self, frame, opt_path, zz_path):
-        # Update optimized path
+    def _update_animation(self, frame, hybrid_path, opt_path, spiral_path):
+        # Update hybrid path
+        if frame < len(hybrid_path):
+            x, y, z = hybrid_path[frame]
+            self.hybrid_drill.set_data([x], [y])
+            self.hybrid_drill.set_3d_properties([z])
+            self.hybrid_x.append(x)
+            self.hybrid_y.append(y)
+            self.hybrid_z.append(z)
+            self.hybrid_line.set_data(self.hybrid_x, self.hybrid_y)
+            self.hybrid_line.set_3d_properties(self.hybrid_z)
+        
+        # Update comparison paths
         if frame < len(opt_path):
             x, y, z = opt_path[frame]
-            self.opt_drill.set_data([x], [y])
-            self.opt_drill.set_3d_properties([z])
             self.opt_x.append(x)
             self.opt_y.append(y)
             self.opt_z.append(z)
             self.opt_line.set_data(self.opt_x, self.opt_y)
             self.opt_line.set_3d_properties(self.opt_z)
         
-        # Update zigzag path
-        if frame < len(zz_path):
-            x, y, z = zz_path[frame]
-            self.zz_drill.set_data([x], [y])
-            self.zz_drill.set_3d_properties([z])
-            self.zz_x.append(x)
-            self.zz_y.append(y)
-            self.zz_z.append(z)
-            self.zz_line.set_data(self.zz_x, self.zz_y)
-            self.zz_line.set_3d_properties(self.zz_z)
+        if frame < len(spiral_path):
+            x, y, z = spiral_path[frame]
+            self.spiral_x.append(x)
+            self.spiral_y.append(y)
+            self.spiral_z.append(z)
+            self.spiral_line.set_data(self.spiral_x, self.spiral_y)
+            self.spiral_line.set_3d_properties(self.spiral_z)
         
-        return self.opt_line, self.opt_drill, self.zz_line, self.zz_drill
+        return self.hybrid_line, self.hybrid_drill, self.opt_line, self.spiral_line
 
 # Main execution
 if __name__ == "__main__":
     print("Optimizing toolpath...")
     optimizer = ToolpathOptimizer(grid_points)
     optimized_path = optimizer.evolve()
-    zigzag_path = create_zigzag_path()
+    spiral_pocket_path = create_spiral_pocket_path()
+    hybrid_path = create_hybrid_path([grid_points.index(p) for p in optimized_path])
     
     # Calculate path lengths
     opt_length = optimizer.path_length([grid_points.index(p) for p in optimized_path])
-    zz_length = optimizer.path_length([grid_points.index(p) for p in zigzag_path])
+    hybrid_length = optimizer.path_length([grid_points.index(p) for p in hybrid_path])
     
     print(f"\nOptimized Path Length: {opt_length:.4f} units")
-    print(f"Zigzag Path Length: {zz_length:.4f} units")
-    print(f"Improvement: {(1 - opt_length/zz_length)*100:.2f}% shorter")
+    print(f"Hybrid Path Length: {hybrid_length:.4f} units")
+    print(f"Difference: {hybrid_length-opt_length:.4f} units ({(hybrid_length/opt_length-1)*100:.2f}% longer)")
     
     print("Creating visualization...")
-    visualizer = HLetterVisualizer()
-    visualizer.animate_paths(optimized_path, zigzag_path)
+    visualizer = LLetterVisualizer()
+    visualizer.animate_paths(hybrid_path, optimized_path, spiral_pocket_path)
     
     plt.tight_layout()
     plt.show()
